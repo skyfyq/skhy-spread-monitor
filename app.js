@@ -495,8 +495,8 @@
       const res = await fetch("/api/alert-status", { cache: "no-store" });
       if (!res.ok) throw new Error("status failed");
       const s = await res.json();
-      const low = Number(s.low_threshold ?? 30);
-      const high = Number(s.high_threshold ?? 40);
+      const low = Number(s.low_threshold ?? 37);
+      const high = Number(s.high_threshold ?? 43);
       const premNum = s.last_premium == null ? null : Number(s.last_premium);
       const prem = premNum == null ? "—" : `${premNum.toFixed(2)}%`;
 
