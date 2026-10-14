@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SKHY ↔ SKHYNIX 差价监测</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css?v=20260910-7d" />
+  </head>
+  <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+    <div class="bg-glow" aria-hidden="true"></div>
+
+    <header class="top">
+      <div class="brand">
+        <span class="brand-mark">Δ</span>
+        <div>
+          <h1>SKHY Spread</h1>
+          <p class="tagline">10×SKHY vs SKHYNIX · Binance Futures</p>
+        </div>
+      </div>
+      <div class="status" id="status">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">连接中…</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero-spread" aria-live="polite">
+        <div class="hero-label">ADR 溢价（10×SKHY / SKHYNIX − 1）</div>
+        <div class="hero-value" id="premium">—</div>
+        <div class="hero-sub" id="spreadAbs">差价 — USDT</div>
+      </section>
+
+      <section class="prices">
+        <article class="price-block">
+          <h2>SKHY</h2>
+          <p class="sym">SKHYUSDT</p>
+          <p class="num" id="skhy">—</p>
+        </article>
+        <article class="price-block accent">
+          <h2>10 × SKHY</h2>
+          <p class="sym">换算标的</p>
+          <p class="num" id="tenSkhy">—</p>
+        </article>
+        <article class="price-block">
+          <h2>SKHYNIX</h2>
+          <p class="sym">SKHYNIXUSDT</p>
+          <p class="num" id="skhynix">—</p>
+        </article>
+      </section>
+
+      <section class="chart-panel">
+        <div class="chart-head">
+          <div class="chart-title">
+            <h2>溢价走势</h2>
+            <p id="updatedAt">等待行情…</p>
+          </div>
+          <div class="range-tabs" role="tablist" aria-label="时间范围">
+            <button type="button" class="range-btn" data-range="15m">15分</button>
+            <button type="button" class="range-btn" data-range="1h">1时</button>
+            <button type="button" class="range-btn" data-range="4h">4时</button>
+            <button type="button" class="range-btn" data-range="24h">24时</button>
+            <button type="button" class="range-btn is-active" data-range="7d">1周</button>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="chart" width="960" height="320" role="img" aria-label="溢价百分比走势图，横轴为时间"></canvas>
+          <div class="chart-tooltip" id="chartTooltip" hidden></div>
+        </div>
+        <p class="chart-meta" id="chartMeta">X 轴：时间 · Y 轴：ADR 溢价%</p>
+      </section>
+
+      <section class="controls">
+        <label>
+          页面告警阈值（|溢价| ≥ %）
+          <input type="number" id="alertThreshold" value="25" min="0" step="0.5" />
+        </label>
+        <label>
+          刷新提示音
+          <input type="checkbox" id="alertSound" />
+        </label>
+        <p class="hint" id="alertHint">未触发告警</p>
+      </section>
+
+      <section class="email-alert" id="emailAlertBox">
+        <div class="email-alert-head">
+          <h2>邮件警报</h2>
+          <p class="email-alert-to" id="emailAlertTo">收件人加载中…</p>
+        </div>
+        <div class="email-rules">
+          <article class="email-rule low">
+            <span class="email-rule-label">偏低报警</span>
+            <strong id="emailRuleLow">&lt; 36%</strong>
+            <span class="email-rule-desc">溢价跌破此值发邮件</span>
+          </article>
+          <article class="email-rule mid">
+            <span class="email-rule-label">安全区间</span>
+            <strong id="emailRuleMid">36% – 41%</strong>
+            <span class="email-rule-desc">此区间不发邮件</span>
+          </article>
+          <article class="email-rule high">
+            <span class="email-rule-label">偏高报警</span>
+            <strong id="emailRuleHigh">&gt; 41%</strong>
+            <span class="email-rule-desc">溢价升破此值发邮件</span>
+          </article>
+        </div>
+        <p class="email-alert-status" id="emailAlertStatus">加载中…</p>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        数据来源 Binance USDⓈ-M · WebSocket 实时推送 · 仅供参考，非投资建议
+      </p>
+    </footer>
+
+    <script src="app.js?v=20260910-7d"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "to": "122481811@qq.com",
+  "low_threshold": 36,
+  "high_threshold": 41,
+  "low_reset": 36.5,
+  "high_reset": 40.5,
+  "cooldown_minutes": 30,
+  "smtp": {
+    "host": "smtp.163.com",
+    "port": 465,
+    "ssl": true,
+    "user": "timeforks@163.com",
+    "password": ""
+  }
+}

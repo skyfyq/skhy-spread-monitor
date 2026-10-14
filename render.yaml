@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: skhy-spread-monitor
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python server.py"
+    healthCheckPath: /
+    envVars:
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      # Optional email alerts — set these in Render dashboard (do not commit secrets)
+      - key: ALERT_ENABLED
+        value: "false"
+      - key: ALERT_TO
+        sync: false
+      - key: SMTP_HOST
+        value: "smtp.163.com"
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SSL
+        value: "true"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false

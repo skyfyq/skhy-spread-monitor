@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.DS_Store
+alert_config.json
+watchdog.log
