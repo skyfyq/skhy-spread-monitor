@@ -22,8 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8765"))
-BINANCE_PRICE = "https://fapi.binance.com/fapi/v1/ticker/price"
-BINANCE_KLINES = "https://fapi.binance.com/fapi/v1/klines"
+BINANCE_PRICE = "https://www.binance.com/fapi/v1/ticker/price"
+BINANCE_KLINES = "https://www.binance.com/fapi/v1/klines"
 ALERT_CONFIG_PATH = ROOT / "alert_config.json"
 
 RANGES = {
