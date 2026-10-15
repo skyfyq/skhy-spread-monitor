@@ -1,10 +1,10 @@
 {
   "enabled": true,
   "to": "122481811@qq.com",
-  "low_threshold": 37,
-  "high_threshold": 43,
-  "low_reset": 37.5,
-  "high_reset": 42.5,
+  "low_threshold": 40,
+  "high_threshold": 47,
+  "low_reset": 40.5,
+  "high_reset": 46.5,
   "cooldown_minutes": 30,
   "smtp": {
     "host": "smtp.163.com",
