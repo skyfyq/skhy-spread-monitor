@@ -21,17 +21,23 @@ Web Service (see `render.yaml` for the Blueprint):
 - Env: `HOST=0.0.0.0` (Render injects `PORT`)
 - Optional email alerts: set `ALERT_*` and `SMTP_*` in the Render dashboard. Do not commit `alert_config.json` or SMTP passwords.
 
-## Binance host
+## Prices
 
-Ticker and kline requests use `{BINANCE_FAPI_BASE}/fapi/v1/ticker/price` and `{BINANCE_FAPI_BASE}/fapi/v1/klines`. The default base is `https://www.binance.com`. `https://fapi.binance.com` answers 418/451 from some datacenter IPs (including Render’s Singapore region), which freezes the price cache on the last good values.
+Live quotes prefer the Binance market websocket:
 
-Override the origin (no path) when you need a different host:
+`wss://fstream.binance.com/market/stream?streams=skhyusdt@miniTicker/skhynixusdt@miniTicker`
+
+Render’s shared Singapore egress is often REST-banned by Binance (`HTTP 418`, code `-1003`, “use the websocket”). The older `/stream` URL connects and then sends no equity-perp ticks, so both the page and the server use `/market/stream`. `dstream.binance.com` is the second websocket host. Override with `BINANCE_WS_URL` (full `wss://` URL).
+
+REST is still used for kline backfill, and for quotes if the websocket is quiet. The first host is `BINANCE_FAPI_BASE` (default `https://www.binance.com`, trailing slash ignored). A 418/429/451 backs off until the `banned until` timestamp in the body, so a shared IP ban is not extended every poll.
+
+If Binance REST is blocked, quotes fall through to public futures tickers that list the same contracts: Gate.io (`SKHY_USDT` / `SKHYNIX_USDT`), then Bitget, OKX, and MEXC. Kline backfill falls through to Gate.io. `/api/prices` includes `source` (`binance-ws`, `binance:https://...`, `gate`, `bitget`, `okx`, or `mexc`).
+
+Optional proxy for REST only: `BINANCE_PROXY` (wins) or the usual `HTTPS_PROXY` / `HTTP_PROXY`. Example:
 
 ```bash
-BINANCE_FAPI_BASE=https://fapi.binance.com python server.py
+BINANCE_FAPI_BASE=https://fapi.binance.com BINANCE_PROXY=http://127.0.0.1:8888 python server.py
 ```
-
-On Render, set `BINANCE_FAPI_BASE` in the service environment. A trailing slash is ignored.
 
 1. Connect this GitHub repo to Render (Blueprint or New Web Service).
 2. Confirm start command `python server.py` and `HOST=0.0.0.0`.
