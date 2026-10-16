@@ -131,8 +131,7 @@ def cookie_then_fapi() -> dict:
         }
 
 
-def ws_probe(path: str, timeout: int = 8) -> dict:
-    host = "fstream.binance.com"
+def ws_probe_host(host: str, path: str, timeout: int = 8) -> dict:
     started = time.time()
     key = base64.b64encode(os.urandom(16)).decode()
     try:
@@ -216,42 +215,16 @@ def ws_probe(path: str, timeout: int = 8) -> dict:
 
 
 def run_probes() -> None:
+    # REST is already known to 418 from this region. Do not call it again.
     jobs = []
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        futs = [pool.submit(http_get, url) for url in URLS]
-        futs.append(
-            pool.submit(
-                http_get,
-                "https://www.binance.com/fapi/v1/ticker/price?symbol=SKHYUSDT",
-            )
-        )
-        futs.append(
-            pool.submit(
-                http_get,
-                "https://fapi.binance.com/fapi/v1/ticker/price?symbol=SKHYUSDT",
-                {
-                    "Origin": "https://www.binance.com",
-                    "Referer": "https://www.binance.com/",
-                },
-                8,
-                "referer https://fapi.binance.com/fapi/v1/ticker/price?symbol=SKHYUSDT",
-            )
-        )
-        futs.append(
-            pool.submit(
-                http_get,
-                "https://www.binance.com/fapi/v1/ticker/price?symbol=SKHYUSDT",
-                {
-                    "Origin": "https://www.binance.com",
-                    "Referer": "https://www.binance.com/",
-                },
-                8,
-                "referer https://www.binance.com/fapi/v1/ticker/price?symbol=SKHYUSDT",
-            )
-        )
-        futs.append(pool.submit(cookie_then_fapi))
-        futs.append(pool.submit(ws_probe, "/ws/skhyusdt@miniTicker"))
-        futs.append(pool.submit(ws_probe, "/stream?streams=skhyusdt@ticker/skhynixusdt@ticker"))
+    targets = [
+        ("fstream.binance.com", "/market/ws/skhyusdt@miniTicker"),
+        ("fstream.binance.com", "/market/stream?streams=skhyusdt@miniTicker/skhynixusdt@miniTicker"),
+        ("dstream.binance.com", "/market/stream?streams=skhyusdt@miniTicker/skhynixusdt@miniTicker"),
+        ("fstream.binance.com", "/market/ws/skhyusdt@kline_1m"),
+    ]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = [pool.submit(ws_probe_host, host, path) for host, path in targets]
         for fut in as_completed(futs):
             try:
                 jobs.append(fut.result())
