@@ -3,17 +3,20 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import smtplib
+import socket
 import ssl
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from email.header import Header
 from email.mime.text import MIMEText
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -26,8 +29,9 @@ PORT = int(os.environ.get("PORT", "8765"))
 # www.binance.com serves the same /fapi/v1 paths. Override with BINANCE_FAPI_BASE.
 _raw_fapi_base = os.environ.get("BINANCE_FAPI_BASE", "").strip().rstrip("/")
 BINANCE_FAPI_BASE = _raw_fapi_base or "https://www.binance.com"
-BINANCE_PRICE = f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/price"
-BINANCE_KLINES = f"{BINANCE_FAPI_BASE}/fapi/v1/klines"
+# Equity-perp tickers are delivered on /market/stream. The older /stream path
+# completes the handshake and then stays silent, which froze the UI on REST.
+BINANCE_WS_STREAM = "skhyusdt@miniTicker/skhynixusdt@miniTicker"
 ALERT_CONFIG_PATH = ROOT / "alert_config.json"
 
 RANGES = {
@@ -54,6 +58,16 @@ _alert_state: dict = {
     "last_kind": None,
 }
 _stop = threading.Event()
+_binance_rest_blocked_until = 0.0
+_ws_quote = {"skhy": None, "skhynix": None, "at": 0.0, "source": ""}
+_source_logged: str | None = None
+
+_GATE_CONTRACT = {"SKHYUSDT": "SKHY_USDT", "SKHYNIXUSDT": "SKHYNIX_USDT"}
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/127.0.0.0 Safari/537.36"
+)
 
 
 def load_alert_config() -> dict:
@@ -234,26 +248,100 @@ def alert_status_payload() -> dict:
     }
 
 
+def binance_ws_urls() -> list[str]:
+    defaults = [
+        f"wss://fstream.binance.com/market/stream?streams={BINANCE_WS_STREAM}",
+        f"wss://dstream.binance.com/market/stream?streams={BINANCE_WS_STREAM}",
+    ]
+    custom = os.environ.get("BINANCE_WS_URL", "").strip()
+    if not custom:
+        return defaults
+    return [custom, *[url for url in defaults if url != custom]]
+
+
+def binance_rest_bases() -> list[str]:
+    raw = [
+        BINANCE_FAPI_BASE,
+        "https://www.binance.com",
+        "https://fapi.binance.com",
+        "https://fapi1.binance.com",
+        "https://fapi2.binance.com",
+        "https://fapi3.binance.com",
+    ]
+    bases: list[str] = []
+    for base in raw:
+        base = base.strip().rstrip("/")
+        if base and base not in bases:
+            bases.append(base)
+    return bases
+
+
+def binance_rest_blocked() -> bool:
+    return time.time() < _binance_rest_blocked_until
+
+
+def note_binance_rest_failure(exc: BaseException) -> None:
+    global _binance_rest_blocked_until
+    text = str(exc)
+    until_s = None
+    marker = "banned until "
+    idx = text.find(marker)
+    if idx >= 0:
+        digits: list[str] = []
+        for ch in text[idx + len(marker) :]:
+            if ch.isdigit():
+                digits.append(ch)
+            elif digits:
+                break
+        if digits:
+            raw = int("".join(digits))
+            until_s = raw / 1000.0 if raw > 10**12 else float(raw)
+    if until_s is None and any(
+        code in text
+        for code in ("HTTP Error 418", "HTTP Error 429", "HTTP Error 451", "-1003")
+    ):
+        until_s = time.time() + 15 * 60
+    if until_s is None or until_s <= _binance_rest_blocked_until:
+        return
+    _binance_rest_blocked_until = until_s
+    when = datetime.fromtimestamp(until_s, timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    print(f"[prices] binance REST blocked until {when}", flush=True)
+
+
+def _open_url(req: urllib.request.Request, timeout: int):
+    proxy = os.environ.get("BINANCE_PROXY", "").strip()
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        )
+        return opener.open(req, timeout=timeout)
+    # urlopen already honors HTTP_PROXY / HTTPS_PROXY.
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 def fetch_json_urllib(url: str):
     req = urllib.request.Request(
         url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/127.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json",
-        },
+        headers={"User-Agent": _UA, "Accept": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with _open_url(req, 12) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read(300).decode("utf-8", "replace")
+        except Exception:
+            body = ""
+        raise RuntimeError(f"HTTP Error {exc.code}: {exc.reason} {body}".strip()) from exc
 
 
 def fetch_json_powershell(url: str):
+    proxy = os.environ.get("BINANCE_PROXY", "").strip().replace("'", "")
+    proxy_arg = f" -Proxy '{proxy}'" if proxy else ""
     script = (
         "$ProgressPreference='SilentlyContinue'; "
-        f"(Invoke-WebRequest -Uri '{url}' -TimeoutSec 15).Content"
+        f"(Invoke-WebRequest -Uri '{url}' -TimeoutSec 15{proxy_arg}).Content"
     )
     completed = subprocess.run(
         [
@@ -289,16 +377,123 @@ def fetch_json(url: str):
     return fetch_json_urllib(url)
 
 
-def fetch_price(symbol: str) -> float:
-    data = fetch_json(f"{BINANCE_PRICE}?symbol={symbol}")
-    return float(data["price"])
+def _pair_prices(skhy: float, skhynix: float, source: str) -> dict:
+    if skhy <= 0 or skhynix <= 0:
+        raise RuntimeError(f"{source} returned non-positive prices")
+    return {"skhy": skhy, "skhynix": skhynix, "source": source}
+
+
+def fetch_binance_rest_prices() -> dict:
+    if binance_rest_blocked():
+        raise RuntimeError("binance REST skipped while the IP ban is active")
+    last: BaseException | None = None
+    for base in binance_rest_bases():
+        try:
+            skhy = fetch_json(f"{base}/fapi/v1/ticker/price?symbol=SKHYUSDT")
+            nix = fetch_json(f"{base}/fapi/v1/ticker/price?symbol=SKHYNIXUSDT")
+            return _pair_prices(float(skhy["price"]), float(nix["price"]), f"binance:{base}")
+        except Exception as exc:
+            last = exc
+            note_binance_rest_failure(exc)
+            if binance_rest_blocked():
+                break
+    raise RuntimeError(f"binance REST failed: {last}")
+
+
+def fetch_gate_prices() -> dict:
+    skhy = fetch_json("https://api.gateio.ws/api/v4/futures/usdt/tickers?contract=SKHY_USDT")
+    nix = fetch_json("https://api.gateio.ws/api/v4/futures/usdt/tickers?contract=SKHYNIX_USDT")
+    return _pair_prices(float(skhy[0]["last"]), float(nix[0]["last"]), "gate")
+
+
+def fetch_bitget_prices() -> dict:
+    def last(symbol: str) -> float:
+        data = fetch_json(
+            "https://api.bitget.com/api/v2/mix/market/ticker"
+            f"?productType=USDT-FUTURES&symbol={symbol}"
+        )
+        return float(data["data"][0]["lastPr"])
+
+    return _pair_prices(last("SKHYUSDT"), last("SKHYNIXUSDT"), "bitget")
+
+
+def fetch_okx_prices() -> dict:
+    def last(inst: str) -> float:
+        data = fetch_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst}")
+        return float(data["data"][0]["last"])
+
+    return _pair_prices(last("SKHY-USDT-SWAP"), last("SKHYNIX-USDT-SWAP"), "okx")
+
+
+def fetch_mexc_prices() -> dict:
+    def last(symbol: str) -> float:
+        data = fetch_json(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={symbol}")
+        if not data.get("success"):
+            raise RuntimeError(data.get("message") or "mexc ticker failed")
+        return float(data["data"]["lastPrice"])
+
+    return _pair_prices(last("SKHYSTOCK_USDT"), last("SKHYNIXSTOCK_USDT"), "mexc")
+
+
+def fetch_rest_prices() -> dict:
+    errors = []
+    for fetcher in (
+        fetch_binance_rest_prices,
+        fetch_gate_prices,
+        fetch_bitget_prices,
+        fetch_okx_prices,
+        fetch_mexc_prices,
+    ):
+        try:
+            return fetcher()
+        except Exception as exc:
+            errors.append(f"{fetcher.__name__}: {exc}")
+    raise RuntimeError(" | ".join(errors))
+
+
+def fetch_binance_klines(symbol: str, interval: str, limit: int):
+    if binance_rest_blocked():
+        raise RuntimeError("binance REST skipped while the IP ban is active")
+    qs = urllib.parse.urlencode({"symbol": symbol, "interval": interval, "limit": limit})
+    last: BaseException | None = None
+    for base in binance_rest_bases():
+        try:
+            rows = fetch_json(f"{base}/fapi/v1/klines?{qs}")
+            if not isinstance(rows, list) or not rows:
+                raise RuntimeError("empty binance klines")
+            return rows
+        except Exception as exc:
+            last = exc
+            note_binance_rest_failure(exc)
+            if binance_rest_blocked():
+                break
+    raise RuntimeError(f"binance klines failed: {last}")
+
+
+def fetch_gate_klines(symbol: str, interval: str, limit: int):
+    contract = _GATE_CONTRACT[symbol]
+    qs = urllib.parse.urlencode(
+        {"contract": contract, "interval": interval, "limit": limit}
+    )
+    rows = fetch_json(f"https://api.gateio.ws/api/v4/futures/usdt/candlesticks?{qs}")
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError("empty gate klines")
+    out = [
+        [int(row["t"]) * 1000, row["o"], row["h"], row["l"], row["c"]]
+        for row in rows
+    ]
+    out.sort(key=lambda row: row[0])
+    return out
 
 
 def fetch_klines(symbol: str, interval: str, limit: int):
-    qs = urllib.parse.urlencode(
-        {"symbol": symbol, "interval": interval, "limit": limit}
-    )
-    return fetch_json(f"{BINANCE_KLINES}?{qs}")
+    errors = []
+    for fetcher in (fetch_binance_klines, fetch_gate_klines):
+        try:
+            return fetcher(symbol, interval, limit)
+        except Exception as exc:
+            errors.append(str(exc))
+    raise RuntimeError("; ".join(errors))
 
 
 def build_history(range_key: str) -> dict:
@@ -321,20 +516,34 @@ def build_history(range_key: str) -> dict:
     return {"range": range_key, "interval": interval, "points": points}
 
 
+def publish_prices(data: dict, *, alert: bool) -> None:
+    global _source_logged
+    source = str(data.get("source") or "")
+    if source != _source_logged:
+        print(
+            f"[prices] source={source} skhy={data['skhy']} skhynix={data['skhynix']}",
+            flush=True,
+        )
+        _source_logged = source
+    with _cache_lock:
+        _price_cache["at"] = time.time()
+        _price_cache["data"] = {
+            "skhy": data["skhy"],
+            "skhynix": data["skhynix"],
+            "source": source,
+        }
+        _price_cache["error"] = None
+    if alert:
+        check_email_alert(float(data["skhy"]), float(data["skhynix"]))
+
+
 def refresh_prices() -> None:
     try:
-        data = {
-            "skhy": fetch_price("SKHYUSDT"),
-            "skhynix": fetch_price("SKHYNIXUSDT"),
-        }
-        with _cache_lock:
-            _price_cache["at"] = time.time()
-            _price_cache["data"] = data
-            _price_cache["error"] = None
-        check_email_alert(data["skhy"], data["skhynix"])
+        publish_prices(fetch_rest_prices(), alert=False)
     except Exception as exc:
         with _cache_lock:
             _price_cache["error"] = str(exc)
+        print(f"[prices] REST failed: {exc}", flush=True)
 
 
 def refresh_history(range_key: str = "7d") -> None:
@@ -352,16 +561,187 @@ def refresh_history(range_key: str = "7d") -> None:
             }
 
 
+def _ws_send_pong(ssock: ssl.SSLSocket, payload: bytes) -> None:
+    if len(payload) > 125:
+        payload = payload[:125]
+    mask = os.urandom(4)
+    masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
+    ssock.sendall(bytes([0x8A, 0x80 | len(payload)]) + mask + masked)
+
+
+def _ws_recv_exact(ssock: ssl.SSLSocket, size: int, buf: bytearray) -> bytes:
+    while len(buf) < size:
+        chunk = ssock.recv(4096)
+        if not chunk:
+            raise ConnectionError("websocket closed")
+        buf.extend(chunk)
+    out = bytes(buf[:size])
+    del buf[:size]
+    return out
+
+
+def _ws_read_frame(ssock: ssl.SSLSocket, buf: bytearray) -> tuple[int, bytes, bool]:
+    header = _ws_recv_exact(ssock, 2, buf)
+    fin = bool(header[0] & 0x80)
+    opcode = header[0] & 0x0F
+    length = header[1] & 0x7F
+    if length == 126:
+        length = int.from_bytes(_ws_recv_exact(ssock, 2, buf), "big")
+    elif length == 127:
+        length = int.from_bytes(_ws_recv_exact(ssock, 8, buf), "big")
+    payload = _ws_recv_exact(ssock, length, buf) if length else b""
+    return opcode, payload, fin
+
+
+def apply_ws_message(text: str) -> None:
+    msg = json.loads(text)
+    payload = msg.get("data") if isinstance(msg, dict) and isinstance(msg.get("data"), dict) else msg
+    if not isinstance(payload, dict):
+        return
+    symbol = payload.get("s")
+    if symbol == "SKHYUSDT":
+        key = "skhy"
+    elif symbol == "SKHYNIXUSDT":
+        key = "skhynix"
+    else:
+        return
+    price = float(payload["c"])
+    if price <= 0:
+        return
+    data = None
+    with _cache_lock:
+        _ws_quote[key] = price
+        _ws_quote["at"] = time.time()
+        _ws_quote["source"] = _ws_quote.get("source") or "binance-ws"
+        if _ws_quote["skhy"] is not None and _ws_quote["skhynix"] is not None:
+            data = {
+                "skhy": float(_ws_quote["skhy"]),
+                "skhynix": float(_ws_quote["skhynix"]),
+                "source": _ws_quote["source"],
+            }
+    if data:
+        publish_prices(data, alert=False)
+
+
+def ws_quotes_fresh(max_age: float = 15.0) -> bool:
+    with _cache_lock:
+        at = float(_ws_quote["at"] or 0.0)
+        ready = _ws_quote["skhy"] is not None and _ws_quote["skhynix"] is not None
+    return ready and (time.time() - at) <= max_age
+
+
+def run_ws_session(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "wss" or not parsed.hostname:
+        raise RuntimeError(f"unsupported websocket url: {url}")
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    host = parsed.hostname
+    port = parsed.port or 443
+    key = base64.b64encode(os.urandom(16)).decode()
+    raw = socket.create_connection((host, port), timeout=10)
+    ssock = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
+    try:
+        ssock.settimeout(20)
+        ssock.sendall(
+            (
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                f"User-Agent: {_UA}\r\n\r\n"
+            ).encode()
+        )
+        blob = b""
+        while b"\r\n\r\n" not in blob:
+            chunk = ssock.recv(4096)
+            if not chunk:
+                raise ConnectionError("websocket handshake closed")
+            blob += chunk
+        head, rest = blob.split(b"\r\n\r\n", 1)
+        status_line = head.split(b"\r\n", 1)[0].decode("latin1", "replace")
+        if " 101 " not in status_line:
+            raise ConnectionError(status_line)
+        with _cache_lock:
+            _ws_quote["source"] = f"binance-ws:{host}"
+        print(f"[prices] binance websocket connected {host}", flush=True)
+        buf = bytearray(rest)
+        parts: list[bytes] = []
+        while not _stop.is_set():
+            opcode, payload, fin = _ws_read_frame(ssock, buf)
+            if opcode == 9:
+                _ws_send_pong(ssock, payload)
+                continue
+            if opcode == 8:
+                raise ConnectionError("websocket closed by server")
+            if opcode in (1, 2):
+                parts = [payload]
+            elif opcode == 0 and parts:
+                parts.append(payload)
+            else:
+                continue
+            if not fin:
+                continue
+            text = b"".join(parts).decode("utf-8", "replace")
+            parts = []
+            if not text:
+                continue
+            try:
+                apply_ws_message(text)
+            except Exception as exc:
+                print(f"[prices] ignored websocket message: {exc}", flush=True)
+    finally:
+        ssock.close()
+
+
+def binance_ws_loop() -> None:
+    backoff = 2
+    while not _stop.is_set():
+        for url in binance_ws_urls():
+            if _stop.is_set():
+                return
+            try:
+                run_ws_session(url)
+                backoff = 2
+            except Exception as exc:
+                print(f"[prices] binance websocket {url} failed: {exc}", flush=True)
+                with _cache_lock:
+                    _ws_quote["at"] = 0.0
+        if _stop.is_set():
+            return
+        _stop.wait(backoff)
+        backoff = min(backoff * 2, 30)
+
+
 def bg_loop() -> None:
-    refresh_prices()
+    threading.Thread(target=binance_ws_loop, name="binance-ws", daemon=True).start()
+    got_ws = False
+    for _ in range(8):
+        if _stop.wait(1):
+            return
+        if ws_quotes_fresh(10):
+            got_ws = True
+            break
+    if not got_ws:
+        refresh_prices()
     refresh_history("7d")
-    last_price = time.time()
+    last_alert = 0.0
+    last_rest = time.time()
     last_history = time.time()
     while not _stop.wait(2):
         now = time.time()
-        if now - last_price >= PRICE_REFRESH_SEC:
+        if not ws_quotes_fresh() and now - last_rest >= PRICE_REFRESH_SEC:
             refresh_prices()
-            last_price = now
+            last_rest = now
+        with _cache_lock:
+            cached = _price_cache.get("data")
+        if cached and cached.get("skhy") and cached.get("skhynix"):
+            if last_alert == 0.0 or now - last_alert >= PRICE_REFRESH_SEC:
+                check_email_alert(float(cached["skhy"]), float(cached["skhynix"]))
+                last_alert = now
         if now - last_history >= HISTORY_REFRESH_SEC:
             refresh_history("7d")
             refresh_history("24h")
@@ -450,6 +830,7 @@ def main() -> None:
     smtp_ok = bool(((cfg.get("smtp") or {}).get("password") or "").strip())
     print(f"SKHY spread monitor → http://{HOST}:{PORT}", flush=True)
     print(f"Binance futures base → {BINANCE_FAPI_BASE}", flush=True)
+    print(f"Binance market stream → {binance_ws_urls()[0]}", flush=True)
     print(
         f"Email alert → {cfg.get('to')} @ <{cfg.get('low_threshold', 40)}% "
         f"or >{cfg.get('high_threshold', 47)}% "

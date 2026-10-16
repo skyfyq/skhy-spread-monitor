@@ -1,6 +1,6 @@
 (() => {
   const WS_URL =
-    "wss://fstream.binance.com/stream?streams=skhyusdt@ticker/skhynixusdt@ticker";
+    "wss://fstream.binance.com/market/stream?streams=skhyusdt@miniTicker/skhynixusdt@miniTicker";
   const RANGE_MS = {
     "15m": 15 * 60 * 1000,
     "1h": 60 * 60 * 1000,

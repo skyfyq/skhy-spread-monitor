@@ -9,8 +9,10 @@ services:
     envVars:
       - key: HOST
         value: "0.0.0.0"
-      # Same /fapi/v1 paths as fapi.binance.com. That host returns 418/451
-      # from some datacenter IPs; override this if another origin is required.
+      # REST origin only. Live quotes use the Binance /market/stream websocket
+      # because this region's shared egress is often HTTP 418 banned on REST.
+      # Optional overrides (set in the dashboard, do not commit secrets):
+      # BINANCE_WS_URL, BINANCE_PROXY, HTTPS_PROXY.
       - key: BINANCE_FAPI_BASE
         value: "https://www.binance.com"
       - key: PYTHON_VERSION
