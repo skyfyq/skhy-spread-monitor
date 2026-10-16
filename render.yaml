@@ -9,6 +9,10 @@ services:
     envVars:
       - key: HOST
         value: "0.0.0.0"
+      # Same /fapi/v1 paths as fapi.binance.com. That host returns 418/451
+      # from some datacenter IPs; override this if another origin is required.
+      - key: BINANCE_FAPI_BASE
+        value: "https://www.binance.com"
       - key: PYTHON_VERSION
         value: "3.11.9"
       # Optional email alerts — set these in Render dashboard (do not commit secrets)
