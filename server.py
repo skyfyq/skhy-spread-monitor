@@ -22,8 +22,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8765"))
-BINANCE_PRICE = "https://fapi.binance.com/fapi/v1/ticker/price"
-BINANCE_KLINES = "https://fapi.binance.com/fapi/v1/klines"
+# fapi.binance.com returns 418/451 from some datacenter IPs (Render Singapore).
+# www.binance.com serves the same /fapi/v1 paths. Override with BINANCE_FAPI_BASE.
+_raw_fapi_base = os.environ.get("BINANCE_FAPI_BASE", "").strip().rstrip("/")
+BINANCE_FAPI_BASE = _raw_fapi_base or "https://www.binance.com"
+BINANCE_PRICE = f"{BINANCE_FAPI_BASE}/fapi/v1/ticker/price"
+BINANCE_KLINES = f"{BINANCE_FAPI_BASE}/fapi/v1/klines"
 ALERT_CONFIG_PATH = ROOT / "alert_config.json"
 
 RANGES = {
@@ -445,6 +449,7 @@ def main() -> None:
     cfg = load_alert_config()
     smtp_ok = bool(((cfg.get("smtp") or {}).get("password") or "").strip())
     print(f"SKHY spread monitor → http://{HOST}:{PORT}", flush=True)
+    print(f"Binance futures base → {BINANCE_FAPI_BASE}", flush=True)
     print(
         f"Email alert → {cfg.get('to')} @ <{cfg.get('low_threshold', 40)}% "
         f"or >{cfg.get('high_threshold', 47)}% "
