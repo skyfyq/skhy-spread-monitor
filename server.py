@@ -123,8 +123,8 @@ def send_alert_email(
             "邮件未配置：请在 alert_config.json 填写 SMTP 授权码 (smtp.password)"
         )
 
-    low = float(cfg.get("low_threshold", 37))
-    high = float(cfg.get("high_threshold", 45))
+    low = float(cfg.get("low_threshold", 41))
+    high = float(cfg.get("high_threshold", 46))
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ten = skhy * 10
     spread = skhynix - ten
@@ -172,8 +172,8 @@ def check_email_alert(skhy: float, skhynix: float) -> None:
         return
 
     premium = calc_premium(skhy, skhynix)
-    low = float(cfg.get("low_threshold", 37))
-    high = float(cfg.get("high_threshold", 45))
+    low = float(cfg.get("low_threshold", 41))
+    high = float(cfg.get("high_threshold", 46))
     low_reset = float(cfg.get("low_reset", low + 0.5))
     high_reset = float(cfg.get("high_reset", high - 0.5))
     cooldown = float(cfg.get("cooldown_minutes", 30)) * 60
@@ -232,10 +232,10 @@ def alert_status_payload() -> dict:
     return {
         "enabled": bool(cfg.get("enabled")),
         "to": cfg.get("to"),
-        "low_threshold": cfg.get("low_threshold", 37),
-        "high_threshold": cfg.get("high_threshold", 45),
-        "low_reset": cfg.get("low_reset", 37.5),
-        "high_reset": cfg.get("high_reset", 44.5),
+        "low_threshold": cfg.get("low_threshold", 41),
+        "high_threshold": cfg.get("high_threshold", 46),
+        "low_reset": cfg.get("low_reset", 41.5),
+        "high_reset": cfg.get("high_reset", 45.5),
         "cooldown_minutes": cfg.get("cooldown_minutes", 30),
         "smtp_configured": bool((smtp.get("password") or "").strip()),
         "latched_low": state.get("latched_low"),
@@ -832,8 +832,8 @@ def main() -> None:
     print(f"Binance futures base → {BINANCE_FAPI_BASE}", flush=True)
     print(f"Binance market stream → {binance_ws_urls()[0]}", flush=True)
     print(
-        f"Email alert → {cfg.get('to')} @ <{cfg.get('low_threshold', 37)}% "
-        f"or >{cfg.get('high_threshold', 45)}% "
+        f"Email alert → {cfg.get('to')} @ <{cfg.get('low_threshold', 41)}% "
+        f"or >{cfg.get('high_threshold', 46)}% "
         f"({'SMTP ready' if smtp_ok else '需要填写 SMTP 授权码'})",
         flush=True,
     )
