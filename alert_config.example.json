@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "to": "122481811@qq.com",
+  "to": "alerts@example.com",
   "low_threshold": 38,
   "high_threshold": 44,
   "low_reset": 38.5,
@@ -10,7 +10,7 @@
     "host": "smtp.163.com",
     "port": 465,
     "ssl": true,
-    "user": "timeforks@163.com",
+    "user": "smtp-user@example.com",
     "password": ""
   }
 }

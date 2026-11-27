@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import smtplib
 import socket
 import ssl
@@ -67,6 +68,11 @@ _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/127.0.0.0 Safari/537.36"
+)
+# Public JSON and the dashboard must not echo mailboxes. Matching is only
+# used to scrub free-text errors (SMTP failures often include the recipient).
+_EMAIL_RE = re.compile(
+    r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
 )
 
 
@@ -224,14 +230,21 @@ def check_email_alert(skhy: float, skhynix: float) -> None:
         print(f"[alert] email failed: {exc}", flush=True)
 
 
+def redact_emails(value: object) -> object:
+    """Remove mailbox addresses from text that is sent to the browser."""
+    if not isinstance(value, str) or "@" not in value:
+        return value
+    return _EMAIL_RE.sub("[redacted]", value)
+
+
 def alert_status_payload() -> dict:
+    """Public alert state. Recipient and SMTP user stay in server config."""
     cfg = load_alert_config()
     smtp = cfg.get("smtp") or {}
     with _cache_lock:
         state = dict(_alert_state)
     return {
         "enabled": bool(cfg.get("enabled")),
-        "to": cfg.get("to"),
         "low_threshold": cfg.get("low_threshold", 38),
         "high_threshold": cfg.get("high_threshold", 44),
         "low_reset": cfg.get("low_reset", 38.5),
@@ -244,7 +257,7 @@ def alert_status_payload() -> dict:
         "last_kind": state.get("last_kind"),
         "last_sent_at": state.get("last_sent_at"),
         "last_ok_at": state.get("last_ok_at"),
-        "last_error": state.get("last_error"),
+        "last_error": redact_emails(state.get("last_error")),
     }
 
 

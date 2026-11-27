@@ -32,7 +32,6 @@
     tooltip: document.getElementById("chartTooltip"),
     chartMeta: document.getElementById("chartMeta"),
     emailAlertStatus: document.getElementById("emailAlertStatus"),
-    emailAlertTo: document.getElementById("emailAlertTo"),
     emailRuleLow: document.getElementById("emailRuleLow"),
     emailRuleMid: document.getElementById("emailRuleMid"),
     emailRuleHigh: document.getElementById("emailRuleHigh"),
@@ -503,11 +502,6 @@
       if (el.emailRuleLow) el.emailRuleLow.textContent = `< ${low}%`;
       if (el.emailRuleHigh) el.emailRuleHigh.textContent = `> ${high}%`;
       if (el.emailRuleMid) el.emailRuleMid.textContent = `${low}% – ${high}%`;
-      if (el.emailAlertTo) {
-        el.emailAlertTo.textContent = s.to
-          ? `收件：${s.to}`
-          : "收件人未配置";
-      }
 
       document.querySelectorAll(".email-rule").forEach((node) => {
         node.classList.remove("is-active");

@@ -19,7 +19,7 @@ Web Service (see `render.yaml` for the Blueprint):
 - Build command: `pip install -r requirements.txt` (stdlib only; the file exists so Render detects Python)
 - Start command: `python server.py`
 - Env: `HOST=0.0.0.0` (Render injects `PORT`)
-- Optional email alerts: set `ALERT_*` and `SMTP_*` in the Render dashboard. Do not commit `alert_config.json` or SMTP passwords.
+- Optional email alerts: set `ALERT_*` and `SMTP_*` in the Render dashboard. Do not commit `alert_config.json`, real mailboxes, or SMTP passwords. `/api/alert-status` reports whether alerts are enabled and whether SMTP is configured. It does not include the recipient.
 
 ## Prices
 
@@ -41,4 +41,4 @@ BINANCE_FAPI_BASE=https://fapi.binance.com BINANCE_PROXY=http://127.0.0.1:8888 p
 
 1. Connect this GitHub repo to Render (Blueprint or New Web Service).
 2. Confirm start command `python server.py` and `HOST=0.0.0.0`.
-3. Add secrets only in the dashboard (`ALERT_ENABLED`, `ALERT_TO`, `SMTP_USER`, `SMTP_PASSWORD`, and related `ALERT_*` / `SMTP_*` keys). Free tier sleeps after idle.
+3. Add secrets only in the dashboard (`ALERT_ENABLED`, `ALERT_TO`, `SMTP_USER`, `SMTP_PASSWORD`, and related `ALERT_*` / `SMTP_*` keys). The same variables are what a server-side deploy (Render or Aliyun) uses to send mail. Free tier sleeps after idle.

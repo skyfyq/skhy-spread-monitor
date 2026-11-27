@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import unittest
 from pathlib import Path
@@ -133,7 +134,7 @@ class AlertBandTests(unittest.TestCase):
 
         status = server.alert_status_payload()
         self.assertFalse(status["enabled"])
-        self.assertIsNone(status["to"])
+        self.assertNotIn("to", status)
         self.assertEqual(status["low_threshold"], 38)
         self.assertEqual(status["high_threshold"], 44)
         self.assertEqual(status["low_reset"], 38.5)
@@ -271,23 +272,116 @@ class AlertBandTests(unittest.TestCase):
         self.assertEqual(example["smtp"]["port"], 465)
         self.assertTrue(example["smtp"]["ssl"])
         self.assertEqual(example["smtp"]["password"], "")
+        self.assertEqual(example["to"], "alerts@example.com")
+        self.assertEqual(example["smtp"]["user"], "smtp-user@example.com")
 
         html = (ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('<strong id="emailRuleLow">&lt; 38%</strong>', html)
         self.assertIn('<strong id="emailRuleMid">38% – 44%</strong>', html)
         self.assertIn('<strong id="emailRuleHigh">&gt; 44%</strong>', html)
-        self.assertIn('src="app.js?v=20261120-38-44"', html)
+        self.assertIn('src="app.js?v=20261127-hide-mailbox"', html)
         self.assertNotIn("44% – 49%", html)
+        self.assertNotIn("emailAlertTo", html)
+        self.assertNotIn("收件", html)
 
         js = (ROOT / "app.js").read_text(encoding="utf-8")
         self.assertIn("s.low_threshold ?? 38", js)
         self.assertIn("s.high_threshold ?? 44", js)
+        self.assertNotIn("emailAlertTo", js)
+        self.assertNotIn("s.to", js)
 
         src = (ROOT / "server.py").read_text(encoding="utf-8")
         self.assertIn("low_reset = float(cfg.get(\"low_reset\", low + 0.5))", src)
         self.assertIn("high_reset = float(cfg.get(\"high_reset\", high - 0.5))", src)
         self.assertNotIn("44.5", src)
         self.assertNotIn("48.5", src)
+
+    def test_public_status_hides_mailbox_and_mail_still_sends(self):
+        email_re = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+        allowed_domains = {"example.com", "example.org"}
+        skip_dirs = {".git", "__pycache__"}
+        skip_names = {"alert_config.json", "watchdog.log"}
+        for path in ROOT.rglob("*"):
+            if not path.is_file() or skip_dirs.intersection(path.parts):
+                continue
+            if path.name in skip_names:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for addr in email_re.findall(text):
+                domain = addr.rsplit("@", 1)[1].lower()
+                self.assertIn(
+                    domain,
+                    allowed_domains,
+                    f"{path.relative_to(ROOT)} contains {addr}",
+                )
+
+        os.environ["ALERT_ENABLED"] = "true"
+        os.environ["ALERT_TO"] = "alerts@example.com"
+        os.environ["SMTP_HOST"] = "smtp.example.com"
+        os.environ["SMTP_PORT"] = "465"
+        os.environ["SMTP_SSL"] = "true"
+        os.environ["SMTP_USER"] = "smtp-user@example.com"
+        os.environ["SMTP_PASSWORD"] = "not-a-real-secret"
+        try:
+            cfg = server.load_alert_config()
+            self.assertEqual(cfg["to"], "alerts@example.com")
+            self.assertEqual(cfg["smtp"]["user"], "smtp-user@example.com")
+            self.assertNotIn("low_threshold", cfg)
+            self.assertNotIn("high_threshold", cfg)
+
+            status = server.alert_status_payload()
+            self.assertNotIn("to", status)
+            self.assertTrue(status["enabled"])
+            self.assertTrue(status["smtp_configured"])
+            self.assertEqual(status["low_threshold"], 38)
+            self.assertEqual(status["high_threshold"], 44)
+            encoded = json.dumps(status)
+            self.assertNotIn("alerts@example.com", encoded)
+            self.assertNotIn("smtp-user@example.com", encoded)
+            self.assertNotIn("@", encoded)
+
+            sent: dict = {}
+
+            class _CaptureSmtp:
+                def __init__(self, host, port, context=None, timeout=None):
+                    sent["init"] = (host, port)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_exc):
+                    return False
+
+                def login(self, user, password):
+                    sent["login"] = (user, password)
+
+                def sendmail(self, from_addr, to_addrs, msg):
+                    sent["mail"] = (from_addr, list(to_addrs), msg)
+
+            server.smtplib.SMTP_SSL = _CaptureSmtp
+            server.send_alert_email = self._real_send
+            server.send_alert_email(cfg, "low", 30.0, 130.0, 1000.0)
+            self.assertEqual(sent["init"], ("smtp.example.com", 465))
+            self.assertEqual(
+                sent["login"], ("smtp-user@example.com", "not-a-real-secret")
+            )
+            self.assertEqual(sent["mail"][0], "smtp-user@example.com")
+            self.assertEqual(sent["mail"][1], ["alerts@example.com"])
+            self.assertIn("alerts@example.com", sent["mail"][2])
+
+            with server._cache_lock:
+                server._alert_state["last_error"] = (
+                    "550 refused alerts@example.com via smtp-user@example.com"
+                )
+            status = server.alert_status_payload()
+            self.assertNotIn("@", json.dumps(status))
+            self.assertEqual(
+                status["last_error"],
+                "550 refused [redacted] via [redacted]",
+            )
+        finally:
+            for key in ENV_KEYS:
+                os.environ.pop(key, None)
 
 
 if __name__ == "__main__":
