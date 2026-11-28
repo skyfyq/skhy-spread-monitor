@@ -172,25 +172,177 @@
     }
   }
 
-  function niceTimeTicks(t0, t1, count = 5) {
-    const span = Math.max(t1 - t0, 60_000);
-    const stepCandidates = [
-      60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
-      60 * 60_000, 2 * 60 * 60_000, 3 * 60 * 60_000, 4 * 60 * 60_000, 6 * 60 * 60_000,
-    ];
-    const target = span / Math.max(count - 1, 1);
-    let step = stepCandidates[stepCandidates.length - 1];
-    for (const s of stepCandidates) {
-      if (s >= target) {
-        step = s;
-        break;
+  const AXIS_FONT = "11px IBM Plex Mono, ui-monospace, monospace";
+  const MINUTE_MS = 60_000;
+  const HOUR_MS = 60 * MINUTE_MS;
+  const DAY_MS = 24 * HOUR_MS;
+  // Steps stop at a week. The previous list ended at 6h, so the 1-week view
+  // still drew a label every few hours and the text collided.
+  const AXIS_STEPS = [
+    MINUTE_MS,
+    2 * MINUTE_MS,
+    5 * MINUTE_MS,
+    10 * MINUTE_MS,
+    15 * MINUTE_MS,
+    30 * MINUTE_MS,
+    HOUR_MS,
+    2 * HOUR_MS,
+    3 * HOUR_MS,
+    4 * HOUR_MS,
+    6 * HOUR_MS,
+    8 * HOUR_MS,
+    12 * HOUR_MS,
+    DAY_MS,
+    2 * DAY_MS,
+    3 * DAY_MS,
+    7 * DAY_MS,
+  ];
+  const AXIS_LABEL_GAP = 12;
+
+  function localOffsetMs(ts) {
+    return -new Date(ts).getTimezoneOffset() * MINUTE_MS;
+  }
+
+  function formatAxisTick(ts, kind) {
+    const d = new Date(ts);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    if (kind === "time") return `${hh}:${mm}`;
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    if (kind === "date") return `${mo}-${day}`;
+    return `${mo}-${day} ${hh}:${mm}`;
+  }
+
+  function axisKinds(step, span) {
+    if (step >= DAY_MS) return ["date"];
+    if (span >= 18 * HOUR_MS) return ["datetime", "time"];
+    return ["time"];
+  }
+
+  function generateTimeTicks(t0, t1, step) {
+    const span = Math.max(t1 - t0, 1);
+    const offset = localOffsetMs(t0 + span / 2);
+    // Multi-day steps start at the next local midnight, then advance by
+    // calendar days. Anchoring them to the epoch skips the ends of the week.
+    const dayAligned = step >= DAY_MS && step % DAY_MS === 0;
+    const alignStep = dayAligned ? DAY_MS : step;
+    let t = Math.ceil((t0 + offset) / alignStep) * alignStep - offset;
+    if (t < t0) t += alignStep;
+    const ticks = [];
+    const limit = Math.ceil(span / step) + 3;
+    for (let i = 0; i < limit && t <= t1; i += 1) {
+      ticks.push(t);
+      if (!dayAligned) {
+        t += step;
+        continue;
+      }
+      const next = new Date(t);
+      next.setDate(next.getDate() + step / DAY_MS);
+      t = next.getTime();
+    }
+    return ticks;
+  }
+
+  function placeAxisLabels(ticks, kind, xAt, canvasW, ctx) {
+    ctx.font = AXIS_FONT;
+    const placed = [];
+    for (const t of ticks) {
+      const text = formatAxisTick(t, kind);
+      const width = ctx.measureText(text).width;
+      const anchor = xAt(t);
+      const half = width / 2;
+      const minX = half + 3;
+      const maxX = canvasW - half - 3;
+      if (minX > maxX) continue;
+      let x = anchor;
+      if (x < minX) x = minX;
+      if (x > maxX) x = maxX;
+      if (Math.abs(x - anchor) > Math.max(14, half * 0.75)) continue;
+      const left = x - half;
+      const prev = placed[placed.length - 1];
+      if (prev && left < prev.right + AXIS_LABEL_GAP) continue;
+      placed.push({ t, text, x, right: x + half });
+    }
+    return placed;
+  }
+
+  function formatRank(kind, span) {
+    if (span >= 2 * DAY_MS) {
+      if (kind === "date") return 0;
+      if (kind === "datetime") return 1;
+      return 2;
+    }
+    if (span >= 18 * HOUR_MS) {
+      if (kind === "datetime") return 0;
+      if (kind === "time") return 1;
+      return 2;
+    }
+    return kind === "time" ? 0 : 1;
+  }
+
+  function axisScore(candidate, span) {
+    const count = candidate.count;
+    const inBand = count >= 3 && count <= 8;
+    let score = inBand ? 1000 : 0;
+    score += Math.min(count, 8) * 10;
+    if (!inBand && count > 8) score -= (count - 8) * 15;
+    if (count < 3) score -= (3 - count) * 30;
+    // A date (or date+time) label is worth about two extra ticks, as long as
+    // the axis still has at least four labels. That keeps 24h/1-week readable
+    // without dropping a wide chart down to two stamps.
+    if (inBand && count >= 4) score += (2 - formatRank(candidate.kind, span)) * 25;
+    return score;
+  }
+
+  function axisBetter(a, b, span) {
+    const scoreA = axisScore(a, span);
+    const scoreB = axisScore(b, span);
+    if (scoreA !== scoreB) return scoreA > scoreB;
+    if (a.count !== b.count) return a.count > b.count;
+    return a.step < b.step;
+  }
+
+  function chooseTimeAxis(t0, t1, canvasW, ctx, xAt) {
+    const span = Math.max(t1 - t0, 1);
+    if (span < MINUTE_MS) {
+      const kind = "time";
+      const ticks = t1 > t0 ? [t0, t1] : [t0];
+      const placed = placeAxisLabels(ticks, kind, xAt, canvasW, ctx);
+      return { step: span, kind, ticks, placed };
+    }
+
+    let best = null;
+    for (const step of AXIS_STEPS) {
+      if (step > span) continue;
+      for (const kind of axisKinds(step, span)) {
+        const ticks = generateTimeTicks(t0, t1, step);
+        if (ticks.length < 2) continue;
+        const placed = placeAxisLabels(ticks, kind, xAt, canvasW, ctx);
+        if (placed.length !== ticks.length) continue;
+        const candidate = { step, kind, ticks, placed, count: ticks.length };
+        if (!best || axisBetter(candidate, best, span)) best = candidate;
       }
     }
-    const first = Math.ceil(t0 / step) * step;
-    const ticks = [];
-    for (let t = first; t <= t1; t += step) ticks.push(t);
-    if (!ticks.length) ticks.push(t0, t1);
-    return ticks;
+    if (best) return best;
+
+    for (let i = AXIS_STEPS.length - 1; i >= 0; i -= 1) {
+      const step = AXIS_STEPS[i];
+      const kind = axisKinds(Math.min(step, span), span)[0];
+      const ticks = generateTimeTicks(t0, t1, step);
+      if (ticks.length < 2) continue;
+      const placed = placeAxisLabels(ticks, kind, xAt, canvasW, ctx);
+      if (placed.length >= 2) return { step, kind, ticks, placed };
+    }
+
+    const kind = span >= 18 * HOUR_MS ? "datetime" : "time";
+    const ticks = [t0, t1];
+    return {
+      step: span,
+      kind,
+      ticks,
+      placed: placeAxisLabels(ticks, kind, xAt, canvasW, ctx),
+    };
   }
 
   function drawChart() {
@@ -259,22 +411,23 @@
       ctx.fillText(`${val.toFixed(2)}%`, pad.l - 8, y + 4);
     }
 
-    // X time grid + labels
+    // X time grid + labels. Step and format follow the span and the width
+    // so a week of points does not stamp a timestamp on every few hours.
     const showDate =
       state.range === "24h" || state.range === "7d" || tSpan > 6 * 60 * 60 * 1000;
-    const ticks = niceTimeTicks(t0, t1, Math.max(4, Math.floor(plotW / 110)));
+    const axis = chooseTimeAxis(t0, t1, w, ctx, xAt);
     ctx.textAlign = "center";
-    ticks.forEach((t) => {
-      const x = xAt(t);
-      if (x < pad.l - 1 || x > w - pad.r + 1) return;
+    ctx.font = AXIS_FONT;
+    axis.placed.forEach((lab) => {
+      const x = xAt(lab.t);
       ctx.strokeStyle = "rgba(15,26,36,0.06)";
+      ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x, pad.t);
       ctx.lineTo(x, pad.t + plotH);
       ctx.stroke();
       ctx.fillStyle = "#5f7385";
-      ctx.font = "11px IBM Plex Mono, monospace";
-      ctx.fillText(fmtTime(t, showDate), x, pad.t + plotH + 22);
+      ctx.fillText(lab.text, lab.x, pad.t + plotH + 22);
     });
 
     // Axis baseline
@@ -552,6 +705,11 @@
   setInterval(refreshEmailStatus, 15000);
 
   window.addEventListener("resize", drawChart);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => {
+      if (state.history.length >= 2) drawChart();
+    });
+  }
   el.chart.addEventListener("mousemove", onChartMove);
   el.chart.addEventListener("mouseleave", hideTooltip);
 
