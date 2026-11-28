@@ -279,7 +279,7 @@ class AlertBandTests(unittest.TestCase):
         self.assertIn('<strong id="emailRuleLow">&lt; 38%</strong>', html)
         self.assertIn('<strong id="emailRuleMid">38% – 44%</strong>', html)
         self.assertIn('<strong id="emailRuleHigh">&gt; 44%</strong>', html)
-        self.assertIn('src="app.js?v=20261127-hide-mailbox"', html)
+        self.assertIn('src="app.js?v=20261128-axis-ticks"', html)
         self.assertNotIn("44% – 49%", html)
         self.assertNotIn("emailAlertTo", html)
         self.assertNotIn("收件", html)
